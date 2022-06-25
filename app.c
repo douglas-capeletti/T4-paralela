@@ -1,17 +1,15 @@
 #include "mpi.h"
-#include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
-
-#ifndef	FALSE
-#define	FALSE	(0)
+#include <stdio.h>
+#include <string.h>
+#ifndef FALSE
+#define FALSE (0)
+#endif
+#ifndef TRUE
+#define TRUE (!FALSE)
 #endif
 
-#ifndef	TRUE
-#define	TRUE	(!FALSE)
-#endif
-
-#define SIZE 300
+#define VET_SIZE 1000000 // UM MILIAAAAAAAO ZINIO
 
 void swap(int *xp, int *yp)
 {
@@ -20,7 +18,7 @@ void swap(int *xp, int *yp)
     *yp = temp;
 }
 
-void bubbleSort(int arr[], int n)
+void bubbleSort(int n, int *arr)
 {
     int i, j;
     for (i = 0; i < n - 1; i++)
@@ -31,75 +29,121 @@ void bubbleSort(int arr[], int n)
 
 int main(int argc, char **argv)
 {
+    // GENERAL VARIABLES
+    int my_rank, proc_count;
 
     MPI_Init(&argc, &argv);
-
-    int my_rank, proc_n, tag = 99;
-    MPI_Comm_size(MPI_COMM_WORLD, &proc_n);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &proc_count);
 
-    int vetor_size = SIZE / proc_n; // gero parte local do vetor (1/np avos do vetor global)
-    int vetor[vetor_size];
-    for (int i = 0; i < vetor_size; i++)
-        vetor[i] = vetor_size - i; //Inicializa na ordem reversa
+    double initial_time = (my_rank == 0) ? MPI_Wtime() : 0;
 
-    int buffer_size = vetor_size / 10;
-    int buffer[buffer_size];
+    // VECTOR VARIABLES
+    int local_vec_size = VET_SIZE / proc_count;
+    int last = (proc_count - 1);
+    int left = (my_rank != 0) ? my_rank - 1 : 0;
+    int right = (my_rank < last) ? my_rank + 1 : last;
 
-    int status[proc_n];
+    // SWAP VARIABLES
+    int swap;
+    int swap_size = local_vec_size / 10;
 
-    int pronto = FALSE;
-    while (!pronto)
+    // FILL MAIN VEC
+    int *vector = (int *)malloc((swap_size + local_vec_size) * sizeof(int));
+    for (int i = 0; i < local_vec_size; i++)
+        vector[i] = (proc_count - my_rank) * local_vec_size - i;
+
+    // CONTROL VARIABLES
+    int ready_neighbor_count, all_ready = FALSE;
+    int ctrl_vec[proc_count];
+    memset(ctrl_vec, 0, sizeof(ctrl_vec));
+
+    while (!all_ready)
     {
+        bubbleSort(local_vec_size, vector);
 
-        // ordeno vetor local
-        int status[my_rank] = FALSE;
-        bubbleSort(vetor, vetor_size);
-
-        // verifico condição de parada
-
-        // se não for np-1, mando o meu maior elemento para a direita
-        if (my_rank < proc_n)
+        // SEND -> RIGHT
+        if (my_rank != last)
         {
-            //envia elemento da direita
+            MPI_Send(&vector[local_vec_size - 1], 1, MPI_INT, right, 0, MPI_COMM_WORLD);
         }
 
-        // se não for 0, recebo o maior elemento da esquerda
-        if (proc_n != 0)
+        // RECEIVE -> LEFT
+        if (my_rank != 0)
         {
-            //recebo o maior da esquerda
+            MPI_Recv(&swap, 1, MPI_INT, left, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            ctrl_vec[my_rank] = swap < vector[0] ? 1 : 0;
         }
 
-        // comparo se o meu menor elemento é maior do que o maior elemento recebido (se sim, estou ordenado em relação ao meu vizinho)
-        if (vetor[0] > buffer[buffer_size - 1])
+        // EXCEPTION CASE SEND
+        if (my_rank == 1)
         {
-            status[my_rank] = TRUE;
+            MPI_Send(vector, 1, MPI_INT, left, 0, MPI_COMM_WORLD);
         }
 
-        // compartilho o meu estado com todos os processos, fazendo um BCAST com cada processo como origem (NP vezes)
-
-        for (int i = 0; i < proc_n; i++)
+        // EXCEPTION CASE RECEIVE
+        if (my_rank == 0)
         {
-            //enviar o status na posicao proc_n
-            MPI_Bcast(&status, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            MPI_Recv(&swap, 1, MPI_INT, right, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            ctrl_vec[my_rank] = swap > vector[local_vec_size - 1] ? 1 : 0;
         }
 
-        // se todos estiverem ordenados com seus vizinhos, a ordenação do vetor global está pronta ( pronto = TRUE, break)
+        // BROADCAST STATUS
+        for (int i = 0; i < proc_count; i++)
+        {
+            MPI_Bcast(&ctrl_vec[i], 1, MPI_UNSIGNED_CHAR, i, MPI_COMM_WORLD);
+        }
 
-        // senão continuo
+        // VERIFY STATUS
+        ready_neighbor_count = 0;
+        for (int i = 0; i < (proc_count * 2) - 2; i++)
+        {
+            if (ctrl_vec[i] == 1)
+            {
+                ready_neighbor_count++;
+            }
+        }
+        if (ready_neighbor_count == proc_count)
+        {
+            all_ready = TRUE;
+            break;
+        }
 
-        // troco valores para convergir
+        //******************************
+        // #3. Converge
+        //******************************
 
-        // se não for o 0, mando os menores valores do meu vetor para a esquerda
+        // Send to left if im not the first process.
+        if (my_rank != 0)
+        {
+            /* first, send my portion, and wait to recive from neightbor if im no the least process*/
+            MPI_Send(vector, swap_size, MPI_INT, left, 0, MPI_COMM_WORLD); // send to left
+        }
 
-        // se não for np-1, recebo os menores valores da direita
+        if (my_rank != last)
+        {
+            // Wait for right to send
+            MPI_Recv(&vector[local_vec_size], swap_size, MPI_INT, right, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // Ordenate vector without my left portion
+            bubbleSort(local_vec_size, vector + swap_size);
+            // Send back the right portion
+            MPI_Send(&vector[local_vec_size], swap_size, MPI_INT, right, 0, MPI_COMM_WORLD);
+        }
+        if (my_rank != 0)
+        {
+            MPI_Recv(vector, swap_size, MPI_INT, left, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
 
-        // ordeno estes valores com a parte mais alta do meu vetor local
+    } // End While
+    // At this point, our vector is ordenate like a charm!!!
 
-        // devolvo os valores que recebi para a direita
-
-        // se não for o 0, recebo de volta os maiores valores da esquerda
+    if (my_rank == 0)
+    {
+        double final_time = (my_rank == 0) ? MPI_Wtime() : 0;
+        printf("Tempo de execucao: %.4f s\n", final_time - initial_time);
     }
 
+    free(vector);
     MPI_Finalize();
+    return 0;
 }
