@@ -109,33 +109,28 @@ int main(int argc, char **argv)
             break;
         }
 
-        //******************************
-        // #3. Converge
-        //******************************
-
-        // Send to left if im not the first process.
         if (my_rank != 0)
         {
-            /* first, send my portion, and wait to recive from neightbor if im no the least process*/
-            MPI_Send(vector, swap_size, MPI_INT, left, 0, MPI_COMM_WORLD); // send to left
+            // SEND -> LEFT
+            MPI_Send(vector, swap_size, MPI_INT, left, 0, MPI_COMM_WORLD);
         }
 
         if (my_rank != last)
         {
-            // Wait for right to send
+            // RECEIVE -> RIGHT
             MPI_Recv(&vector[local_vec_size], swap_size, MPI_INT, right, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // Ordenate vector without my left portion
+            // SORT
             bubbleSort(local_vec_size, vector + swap_size);
-            // Send back the right portion
+            // SEND -> RIGHT
             MPI_Send(&vector[local_vec_size], swap_size, MPI_INT, right, 0, MPI_COMM_WORLD);
         }
         if (my_rank != 0)
         {
+            // RECEIVE -> LEFT
             MPI_Recv(vector, swap_size, MPI_INT, left, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
-    } // End While
-    // At this point, our vector is ordenate like a charm!!!
+    } 
 
     if (my_rank == 0)
     {
